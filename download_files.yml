@@ -1,0 +1,102 @@
+---
+- name: find and download any file in the system
+  hosts: all
+  vars:
+    remote_home_dir_to_download:  files-{{ansible_host}}
+    local_path_to_download: /mnt/distr/
+  become: true
+  tasks:
+
+#FIND
+    - name: examples
+      shell: echo "{{item}}"
+      register: options
+      with_items:
+        - '.*dek.*          - blind search by sequence inside any part of path'
+        - '.*dek[0-9].*     - /home/detect/dek1 /home/detect/dek2'
+        - '^/mnt.*lenta.*   - file inside some folder'
+        - '.*lenta.*\.yml$  - by filename + extension'
+        - '^/home.*b.*at   - all filenames what ends up like this(not folders, only finite files)'
+
+    - name: print pattern
+      pause:
+        prompt: 'Print patterns(.* instead *) - .*hddtemp.* '
+      register: pat
+    - debug:  var=pat.user_input
+
+# find / and delete files
+    - name: find files
+      shell: find / -regex "{{pat.user_input}}" #| sudo xargs rm -r
+      register: outp
+      failed_when:  outp.stdout_lines == ""
+    - debug:  var=outp.stdout_lines
+
+#DOWNLOAD
+
+    - name: mkdir
+      file:
+        path: /home/{{ansible_user}}/{{remote_home_dir_to_download}}
+        state: absent
+
+    - name: mkdir
+      file:
+        path: /home/{{ansible_user}}/{{remote_home_dir_to_download}}
+        state: directory
+
+
+    - name: copy to home
+      copy:
+        src:  '{{item}}'
+        dest: /home/{{ansible_user}}/{{remote_home_dir_to_download}}/
+        remote_src: true
+      ignore_errors:  yes
+      with_items:
+        - '{{outp.stdout_lines | list}}'
+
+    - name: mkdir
+      file:
+        path: /home/{{ansible_user}}/{{remote_home_dir_to_download}}
+        state: directory
+        recurse:  true
+        owner:  '{{ansible_user}}'
+        group:  '{{ansible_user}}'
+        mode: '0770'
+
+    - name: du -sh
+      shell:  du -sh /home/{{ansible_user}}/{{remote_home_dir_to_download}}
+      register: volume
+    - debug:  var=volume.stdout_lines
+
+
+    - name: tar
+      archive:
+        path: /home/{{ansible_user}}/{{remote_home_dir_to_download}}
+        dest: /home/{{ansible_user}}/{{remote_home_dir_to_download}}.zip
+        format: zip
+        remove: true
+
+    - name: sync
+      fetch:
+        src:  /home/{{ansible_user}}/{{remote_home_dir_to_download}}.zip
+        dest: '{{local_path_to_download}}'
+        flat: yes
+        
+    - name: ready
+      shell: echo "ARCHIVE LOCATION (LOCALLY) -  {{local_path_to_download}}{{remote_home_dir_to_download}}.zip"
+      register: readiness
+    - debug:  var=readiness.stdout
+#LINK FROM LOCAL TO DOWNLOAD
+
+    - name: link
+      shell:  curl -F 'file=@{{local_path_to_download}}{{remote_home_dir_to_download}}.zip' -Fexpires=365 http://0x0.st
+      ignore_errors:  true
+      register: link
+    - debug:  var=link.stdout
+
+
+
+#(BASH)
+# sudo find / -name "fort*nt" -print 2> /dev/null
+# sudo find / -name "fort*nt" -print | sudo xargs rm -r
+#(+REGULAR EXPRESSIONS)
+# sudo find / -regex '.*minio.*\.yml' 2> /dev/null

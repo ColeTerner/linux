@@ -1,0 +1,1623 @@
+---
+  - name: Gathering info from machines
+    hosts:  all
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    tags: info
+    tasks:
+      
+    #1)Checking RAM
+    - name: Checking RAM of PC
+      assert:
+        that:
+          - ansible_memtotal_mb | int >=14000
+        fail_msg: "Memory is probably 8 GB or LESS. Only pray can help!"
+      ignore_errors: yes
+      
+    #2)Linux Release
+    - name: Get Linux release
+      shell:  uname -a | awk '{print $2,$3,$4}'
+      register: kernel
+      
+    #Print Linux release
+    - name: Print Linux release
+      debug: |
+        msg="Linux release - {{kernel.stdout}}"
+      
+
+    #3)VIDEOCARD
+    - name: Get VIDEOCARD
+      shell:  lspci | grep VGA
+      register: videocard
+      
+
+    #Print videocard
+    - name: Print VIDEOCARD
+      debug: |
+        msg="VIDEOCARD - {{videocard.stdout}}" 
+      
+
+    #4) SERVER's LOAD
+    - name: Get LOAD of the system
+      shell:  cat /proc/loadavg | awk '{print $1,$2,$3}'
+      register: load
+      
+      #when: load >= 1
+      #notify: 
+        #- reboot
+
+    #Print system's load
+    - name: Print LOAD of the system
+      debug: |
+        msg="SERVER's LOAD( 1m 5m 15m ) - {{load.stdout}}"
+      
+
+    #5) Check UPTIME
+    - name: Check UPTIME of the server
+      shell:  uptime | awk '{print $2,$3,$4,$5}'
+      register: uptime
+      
+
+    #Print UPTIME of the server
+    - name: Print UPTIME
+      debug:  |
+        msg="Uptime is - {{uptime.stdout}}"
+      
+
+    #6)Check correct TOKEN
+    - name: Check TOKEN unlift
+      shell:  cat /etc/unlift.ini | grep unlift_token | awk -F '=' '{print $2}'
+      register: unlift_token
+      become: yes
+      ignore_errors:  yes
+    - debug:  var=unlift_token.stdout
+
+    - name: Check TOKEN unlift-updater
+      shell:  cat /etc/unlift-updater.ini | grep -oE "[0-9][a-z]{10}"
+      register: updater_token
+      become: yes
+      ignore_errors:  yes
+    - debug:  var=updater_token.stdout
+
+    # - name: compare tokens
+    #   assert:
+    #     that:
+    #       - "{{unlift_token.stdout}} == {{updater_token.stdout}}"
+    #     fail_msg: "UNLIFT and UNLIFT-UPDATER tokens ARE DIFFERENT!!"
+
+    #Print current TOKEN
+    - name: Print TOKEN
+      debug: |
+        msg="TOKEN is - {{token.stdout}}"
+      ignore_errors: yes
+      
+
+    #7)Check the LICENSE
+    - name: Check LICENSE
+      shell:  cat /etc/findface-extraction-api.ini |grep ntls | awk -F ":" '{print $3}'
+      register: license
+      ignore_errors:  yes
+      
+
+    #Print LICENSE
+    - name: Print LICENSE
+      debug: |
+        msg="LICENSE is - {{license.stdout}}"
+      
+
+    #8)Check the SWAP
+    - name: Check SWAP
+      shell:  free -h | grep total | awk '{print $1,$2,$3}'; free -h | grep Swap | awk '{print $2,$3,$4}'
+      register: swap
+      ignore_errors:  yes
+      
+
+    #Print SWAP
+    - name: Print SWAP
+      debug: |
+        msg="SWAP is - {{swap.stdout_lines}}"
+      
+    #9)Check model of CPU
+
+    #Extract CPU model
+    - name: Check CPU model
+      shell:  lscpu | grep "Model name" | awk '{print $3,$4,$5,$8}'
+      register: cpu
+      
+
+    #Print CPU model
+    - name: Print CPU model
+      debug: |
+        msg="Model of CPU - {{ cpu.stdout }}"
+
+    - name: Check if FINDFACE is installed
+      shell:  dpkg -l | grep findface
+      register: findface
+    - debug:  var=findface.stdout_lines
+
+    #read-only
+    - name: Test Read-Only
+      shell:  touch dek && rm dek
+      register: read_only
+      become: yes
+    - debug:  var=read_only.stdout
+
+
+#(2) FAST DIAGNOSTIC
+
+  - name: Fast diagnostic
+    hosts:  all
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    tasks:
+    #1)Check SERVICES
+
+    #Restart all Services
+
+    - name: service status
+      shell:  systemctl list-units --type service | grep -E 'unlift.*|findface-.*|memcached|etcd' | awk '{print $1,$4}' | column -t -s ' '
+      become: yes
+      register: service_status   #register all of cycle iteration into a single variable
+      ignore_errors:  yes
+      tags: service
+
+    - debug:
+        msg:  "{{ service_status.stdout_lines}}"
+      tags: service
+      
+    - name: Check all services are started
+      systemd:
+        name: "{{ item }}"
+        state:  restarted
+        enabled:  yes
+      with_items:
+        - findface-extraction-api
+        - findface-facerouter
+        - findface-sf-api
+        - findface-video-manager
+       # - findface-video-worker-cpu
+       # - findface-video-worker-gpu
+       # - findface-counter
+        - memcached
+        - unlift
+        - unlift-updater
+        - etcd
+      ignore_errors:  yes
+      become: yes
+      tags: service
+
+    - name: service status
+      shell:  systemctl list-units --type service | grep -E 'unlift.*|findface-.*|memcached|etcd' | awk '{print $1,$4}' | column -t -s ' '
+      become: yes
+      register: service_status   #register all of cycle iteration into a single variable
+      ignore_errors:  yes
+      tags: service
+
+    - debug:
+        msg:  "{{ service_status.stdout_lines}}"
+      tags: service
+
+    #2)Check status of all cameras
+
+    - name: Install jq
+      apt:
+        name: jq
+        update_cache: yes
+      ignore_errors:  yes
+      become: yes
+
+    - name: Check STATUS of cameras(curl)
+      shell: curl -s http://127.0.0.1:18810/jobs | jq -r '.[]|((.status)+" "+.stream_url+" posted="+(.statistic.faces_posted|tostring)+" failed="+(.statistic.faces_failed|tostring)+" not_posted="+(.statistic.faces_not_posted|tostring))'
+      register: curl
+      tags: curl
+
+    - name: Print STATUS of all cameras(posted,failed)
+      debug: |
+        msg="{{ curl.stdout }}"
+      tags: curl
+    #Print status of cameras
+
+  - name: NTP sync and push the NTP time to motherboard
+    hosts:  all
+    gather_facts: false
+    become: yes
+    tags: dns
+    tasks:
+
+      - name: get active connections
+        shell:  nmcli -t -f NAME connection show --active | grep -vE 'tun0|lo'
+        register: list_con
+      - debug:  var=list_con.stdout_lines
+
+      - name: nmcli dns
+        shell:  nmcli con mod '{{item}}' ipv4.dns 8.8.8.8
+        ignore_errors:  yes
+        with_items:
+          - '{{list_con.stdout_lines}}'      
+
+      - name: restart resolver
+        systemd:
+          name: systemd-resolved
+          state:  restarted
+        ignore_errors:  yes
+      
+      - name: reboot
+        reboot:
+
+      - name: nslookup ya.ru
+        shell:  nslookup ya.ru
+        register: nslookup
+      - debug:  var=nslookup.stdout_lines
+
+      # - name: show DNS Only
+      #   shell:  nmcli con show '{{item}}'
+      #   with_items:
+      #     - '{{list_con.stdout_lines}}'
+      #   register: denese
+      # - debug:  var=denese.stdout_lines
+
+  - name: hosts
+    hosts:  all
+    gather_facts: false
+    become: yes
+    tags: hosts
+    tasks:
+
+      - name: Add block
+        blockinfile:
+          path: /etc/hosts
+          state: present
+          insertbefore: "^127.0.0.1.*"
+          block: |
+            185.158.114.149 unlift.ru
+            5.252.192.117 face452k.bit-tech.co
+          marker: "# {mark} ANSIBLE MANAGED BLOCK"
+        become: yes
+
+      # - name: nslookup lic
+      #   shell: nslookup lic
+      #   register: lic
+      # - debug: var=lic.stdout_lines
+
+    #5)BALANCER CHECK
+  - name: NTP sync and push the NTP time to motherboard
+    hosts:  all
+    gather_facts: false
+    become: yes
+    ignore_errors:  true
+    tags: balancer
+    tasks:
+
+      - name: grep ntls
+        shell:  cat /etc/findface-extraction-api.ini | grep ntls | grep -oE "[0-9]{4}"
+        register: ntls
+        ignore_errors:  true
+        become: yes
+      - debug:  var=ntls.stdout
+
+      - name: which balancer
+        shell:  cat /etc/hosts  | grep face452k.bit-tech.co | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        ignore_errors:  true
+        register: balance
+      - debug:  var=balance.stdout
+
+      - name: Example using fail and when together
+        fail:
+          msg: INCORRECT PROXY SETTINGS in /etc/hosts, WRONG IP of balancer 
+        ignore_errors:  true
+        when:
+          - balance.stdout != "5.252.193.80"
+          - balance.stdout != "5.252.192.117"
+
+      - name: balancer 8101-8104, license port
+        wait_for:
+          host: face452k.bit-tech.co
+          port: '{{ item }}'
+          state: started
+          delay: 0
+          timeout: 5
+        ignore_errors:  true
+        with_items:
+          - '8101'
+          - '8102'
+          - '8103'
+          - '8104'
+          - '{{ntls.stdout}}'
+
+      - name: balancer 443 only if new balancer
+        wait_for:
+          host: face452k.bit-tech.co
+          port: 443
+          state: started
+          delay: 0
+          timeout: 5
+        ignore_errors:  true
+        when: balance.stdout is match('.*117')
+
+      - name: unlift 443
+        wait_for:
+          host: '{{item}}'
+          port: 443
+          state: started
+          delay: 0
+          timeout: 5
+        ignore_errors:  true
+        with_items:
+          - '185.158.114.149'
+          - '5.252.195.77'
+
+          
+      - name: unlift 1 ip
+        shell:  curl --connect-timeout 10 -H unlift.ru https://185.158.114.149
+        register: connection_1
+        ignore_errors:  yes
+        #tags: balancer
+      - debug:  var=connection_1.stderr_lines
+
+      - name: unlift 2 ip - check TLS blocking to UNLIFT(if netcat fails)
+        shell:  curl --connect-timeout 10 -H unlift.ru https://5.252.195.77
+        register: connection_2
+        ignore_errors:  yes
+        #tags: balancer
+      - debug:  var=connection_2.stderr_lines
+
+#(3) TIME SYNC
+  - name: NTP sync and push the NTP time to motherboard
+    hosts:  all
+    gather_facts: false
+    become: yes
+    tags: ntp
+    tasks:
+
+      - name: MOTHERBOARD time
+        shell:  hwclock | cut -d "." -f 1
+        register: hw_time
+      - debug:  var=hw_time.stdout
+
+      - name: OS(NTP) time
+        shell:  date +"%Y-%m-%d %H:%M:%S"
+        register: os_time
+      - debug:  var=os_time.stdout
+
+      - name: ntpq "-P"
+        shell:  ntpq -p
+        register: ntpq
+      - debug:  var=ntpq.stdout_lines
+
+      - name: NTP stop
+        systemd:
+          name: ntp
+          state:  stopped
+      
+      - name: NTP sync
+        shell:  ntpd -gq
+        async: 10
+        poll: 10
+
+      - name: NTP start
+        systemd:
+          name: ntp
+          state:  restarted
+
+      - name: UNLIFT UNLIFT-UPDATER restart
+        systemd:
+          name: '{{item}}'
+          state:  restarted
+        with_items:
+          - 'unlift'
+          - 'unlift-updater'
+        
+      - name: Push NTP time to motherboard time
+        shell:   hwclock --systohc
+
+      - name: reboot
+        reboot:
+
+      - name: ntpq "-P"
+        shell:  ntpq -p
+        register: ntpq
+      - debug:  var=ntpq.stdout_lines
+
+      - name: MOTHERBOARD time
+        shell:  hwclock | cut -d "." -f 1
+        register: hw_new_time
+      - debug:  var=hw_new_time.stdout
+
+      - name: OS(NTP) time
+        shell:  date +"%Y-%m-%d %H:%M:%S"
+        register: os_new_time
+      - debug:  var=os_new_time.stdout
+#(4) LOG OBSERVATION
+
+  - name: Observe logs
+    hosts:  all
+    gather_facts: false
+    ignore_errors:  true
+    tags: logs
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    tasks:
+
+    - name: kern logs count
+      shell:  journalctl -p 0..3 | grep kernel 
+      register: kern_logs
+      become: yes
+    - debug:  var=kern_logs.stdout_lines
+
+    - name: dmesg
+      shell: dmesg --level=alert,err,crit,emerg | tail -n 100
+      register: dmesg
+      become: yes
+    - debug: var=dmesg.stdout
+
+    - name: dmesg errors
+      shell: dmesg --level=alert,err,crit,emerg | wc -l
+      register: dmesg
+      become: yes
+    - debug: var=dmesg.stdout
+
+    - name: kern logs count
+      shell:  journalctl -p 0..3 | grep kernel | wc -l
+      register: kern_logs_count
+      become: yes
+    - debug:  var=kern_logs_count.stdout
+
+#(5) Check CONFIG files of findface-* services (/etc/findface-*.ini)
+
+  - name: Check configs of services - findface-video-worker-cpu,findface-video-worker-gpu, findface-sf-api, findface-extraction-api
+    hosts: all
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    become: yes
+    tags: config
+    tasks:
+    
+      - name: findface-video-worker-gpu
+        shell:  cat /etc/findface-video-worker-gpu.ini | grep -v '#.*' | grep -E 'batch_size|skip_count'
+        register: ff_gpu
+        ignore_errors:  yes
+      - debug:  var=ff_gpu.stdout_lines
+
+      - name: findface-video-worker-cpu
+        shell:  cat /etc/findface-video-worker-cpu.ini | grep -v '#.*' | grep -E 'batch_size|skip_count'
+        register: ff_cpu
+        ignore_errors:  yes
+      - debug:  var=ff_cpu.stdout_lines
+
+      - name: findface-sf-api
+        shell:  cat /etc/findface-sf-api.ini | grep -v '#.*' | grep 'connect:'
+        register: ff_sf_api
+      - debug:  var=ff_sf_api.stdout_lines
+
+      - name: findface-extraction-api
+        shell:  cat /etc/findface-extraction-api.ini | grep -v '#.*' | grep -E 'detectors|normalizers|extractors|instances:|max_batch_size:'
+        register: ff_extract
+      - debug:  var=ff_extract.stdout_lines
+
+
+  - name: REBOOT host
+    hosts: all
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    become: yes
+    tags: reboot
+    tasks:
+
+      - name: reboot Host
+        reboot:
+
+
+  - name: Enable check_diag (unlift_diag.py)
+    hosts: all
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    become: yes
+    gather_facts: false
+    tags: check
+    tasks:
+
+      - name: Create task on cron
+        cron:
+          name: check
+          special_time: hourly
+          user: root
+          job: 'python3 /opt/unlift/unlift_proxy/unlift_diag.py -c /etc/unlift.ini|logger'
+          state: present
+        become: yes
+
+      - name: cat /etc/unlift-updater.ini
+        shell:  cat /etc/unlift-updater.ini | grep currentversion
+        register: proxy_version
+        become: yes
+      - debug:  var=proxy_version.stdout
+
+      - name: Set currentversion=1
+        replace:
+          path: /etc/unlift-updater.ini
+          regexp: 'currentversion =.*'
+          replace:  'currentversion = 1'
+        when: proxy_version.stdout != 1
+        become: yes
+
+      - name: cat /etc/unlift-updater.ini
+        shell:  cat /etc/unlift-updater.ini | grep currentversion
+        register: proxy_version_1
+        become: yes
+      - debug:  var=proxy_version_1.stdout
+
+      - name: MANUALLY DO CHECK 
+        shell:  python3 /opt/unlift/unlift_proxy/unlift_diag.py -c /etc/unlift.ini
+        register: checky
+        become: yes
+      - debug:  var=checky.stdout_lines
+    
+
+      - name: restart unlift unlift-updater
+        systemd:
+          name: "{{ item }}"
+          state:  restarted
+        with_items:
+          - unlift
+          - unlift-updater
+        become: yes
+
+  - name: Enable check_diag (unlift_diag.py)
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: pre
+    tasks:
+
+      - name: cat netplan
+        shell:  cat /etc/netplan/* | grep dhcp
+        ignore_errors:  true
+        register: netplan
+      - debug:  var=netplan.stdout_lines
+
+      - name: asssert netplan
+        assert:
+          that:
+            - "'dhcp' not in netplan.stdout_lines"
+          fail_msg: "DHCP inside /etc/netplan/"
+
+      - name: dhcp detect
+        shell:  if [ "$(grep -i 'inet ' /etc/network/interfaces | grep -o 'dhcp')" == "dhcp" ]; then echo "dhcp"; else echo "static"; fi
+        register: type_ip
+      - debug:  var=type_ip.stdout
+
+      - name: assert dhcp
+        assert:
+          that:
+            - "type_ip.stdout != 'dhcp'"
+          fail_msg: "DHCP detected!! Need static IP"
+
+      - name: check internet
+        shell:  ping -c 4 1.1.1.1
+        ignore_errors:  yes
+        register: internet
+      - debug:  var=internet.stdout_lines
+
+      - name: show connections
+        shell:  nmcli connection show
+        register: net_interfaces
+        become: yes
+        ignore_errors:  yes
+      - debug: var=net_interfaces.stdout_lines
+
+      - name: image
+        shell:  ls -lah /install
+        register: image
+        ignore_errors:  yes
+      - debug:  var=image.stdout_lines
+
+      - name: lsb_release
+        shell:  lsb_release -r
+        register: release
+      - debug:  var=release.stdout
+
+      - name: kernel
+        shell:  uname -r
+        register: kernel
+      - debug:  var=kernel.stdout
+
+      - name: df -h
+        shell:  df -h /
+        register: df
+      - debug:  var=df.stdout_lines
+
+      - name: check videocard
+        shell:  lspci | grep -E '3D|VGA'
+        register: gpu
+      - debug:  var=gpu.stdout
+
+      - name: secure boot check
+        shell:  mokutil --sb-state
+        register: secure_boot
+        ignore_errors:  yes
+      - debug:  var=secure_boot.stdout
+
+      - name: check kernel segment faults
+        shell:  zgrep segfault /var/log/kern.log*|grep -c .
+        register: kern_segm
+        ignore_errors:  yes
+      - debug:  var=kern_segm.stdout
+
+      - name: check kernel segment faults
+        shell:  dpkg -l | grep findface
+        register: findface
+        ignore_errors:  yes
+      - debug:  var=findface.stdout_lines
+
+      - name: Check year
+        shell:  date
+        register: year
+      - debug:  var=year.stdout
+
+      - name: nvidia-smi
+        shell:  nvidia-smi
+        register: nvidia
+        ignore_errors:  yes
+      - debug:  var=nvidia.stdout_lines
+      
+  - name: Enable check_diag (unlift_diag.py)
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: throttle
+    tasks:
+
+#Core temperature above threshold
+      - name: count throttle ERROR for today
+        shell:  zgrep 'throttled|Throttled|error|failed|Failed|Core temperature above threshold' /var/log/kern.log.* /var/log/kern.log | tail -n 50
+        register: throttle
+      - debug:  var=throttle.stdout
+
+      - name: count throttle ERROR
+        shell:  grep -E 'throttled|Throttled|error|failed|Failed' /var/log/kern.log.* | wc -l
+        register: throttle_counter
+      - debug:  var=throttle_counter.stdout
+
+
+  - name: SOUND check
+    hosts: all
+    gather_facts: false
+    become: yes
+    #ignore_errors:  yes
+    tags: sound
+    tasks:
+
+      - name: grep SOUND PLAYING
+        shell:  zgrep 'SOUND PLAYING' /var/log/syslog ; zgrep 'DISABLED' /var/log/syslog.*
+        register: sound_disabled
+        ignore_errors:  yes
+      - debug:  var=sound_disabled.stdout_lines
+
+      - name: ffprobe
+        shell:  ffprobe /opt/unlift/unlift_proxy/warning.mp3
+        register: ffprobe
+        ignore_errors:  yes
+      - debug:  var=ffprobe.stdout_lines
+
+      - name: check sound_card
+        shell:  lspci -v | grep -A7 -i "audio"
+        register: sound_card
+        ignore_errors:  yes
+      - debug:  var=sound_card.stdout_lines
+
+      - name: Check bit-radio bit-alert(ur)
+        shell: systemctl status bit-alert bit-radio | grep -E "Active|ERROR" 
+        register: bit_service
+        ignore_errors:  yes
+      - debug:  var=bit_service.stdout_lines
+
+      - name: Check warning_
+        shell:  zgrep 'warning_' /var/log/syslog; zgrep 'warning_' /var/log/syslog /var/log/syslog.*
+        register: alert_warning
+        ignore_errors:  yes
+      - debug:  var=alert_warning.stdout_lines
+
+      - name: grep SOUND PLAYING DISABLED
+        shell:  zgrep 'DISABLED' /var/log/syslog | grep -v ansible-command; zgrep 'DISABLED' /var/log/syslog.* | grep -v ansible-command
+        register: sound_disabled
+        ignore_errors:  yes
+      - debug:  var=sound_disabled.stdout_lines
+
+      - name: auto-mute
+        shell:  sudo amixer | grep Mute | cut -d ',' -f 2
+        ignore_errors:  yes
+        register: mute
+      - debug:  var=mute.stdout
+
+      - name: VOLUME
+        shell:  sudo amixer | grep -A 5 -E 'Master|Headphone' | grep %
+        register: volume
+        ignore_errors:  yes
+      - debug:  var=volume.stdout_lines
+
+      - name: assert AUTO-MUTE
+        assert:
+          that: mute.stdout == '0'
+          fail_msg: 'AUTO-MUTE MODE IS ENABLED !!! FIX IT'
+        ignore_errors:  yes
+
+      - name: number of channels (ALSAMIXER)
+        shell:  amixer | grep -A 5 "Channel Mode"
+        register: channels
+        become: true
+      - debug:  var=channels.stdout_lines
+
+      - name: channels(veriable)
+        shell:  amixer | grep -A 5 "Channel Mode" | grep "Item0" | awk '{print $2}' | sed "s/'//g"
+        register: channel0
+        become: true
+      - debug:  var=channel0.stdout
+
+
+      - block:
+
+        - name: assert channels number(must be 6)
+          assert:
+            that:
+              - channel0.stdout == '6ch'
+            fail_msg: 'USE ALSAMIXER TO SWITCH TO 6ch!'
+
+        rescue:
+        
+          - name: number of channels (ALSAMIXER)
+            shell:  amixer set 'Channel Mode' '6ch'
+            register: new_channels
+            become: true
+          - debug:  var=new_channels.stdout_lines
+
+
+
+
+  - name: Check hardware
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: hardware
+    tasks:
+
+      - name: Check RAM Memory
+        shell:  |
+          echo "RAM: "$(lshw -c memory | grep -A 8 "bank:" | grep product | awk '{print $2}')
+          echo "USAGE: "
+          free -h
+        register: ram
+      - debug: var=ram.stdout_lines
+
+      - name: Check HDD/SSD Disk
+        shell:  |
+          echo "Disk: $(udisksctl  status|grep -v MODEL|grep -v "\-\-"|column -t|awk '{print $1,$2}'|head -n1)"
+          echo "USAGE: "
+          df -h
+        register: disk
+      - debug: var=disk.stdout_lines
+
+      - name: Check CPU Perfomance
+        shell:  |
+          echo "1.CPU: $(cat /proc/cpuinfo |grep "model name"|tail -n1|cut -d ":" -f2)"" with ""$(cat /proc/cpuinfo |grep -c processor)"" cores"
+          echo "2.CORES: $(cat /proc/cpuinfo |grep -c processor)"
+          echo "3.THROTTLING: $(grep -E 'throttled|Throttled' /var/log/kern.log.* | wc -l)"
+          echo "4.CURRENT_FREQUANCY (Mhz): "
+          echo "$(cat /proc/cpuinfo | grep -E 'processor|MHz' | awk '{print $3,$4}') "
+          echo "5.CURRENT_LOAD_and_UPTIME: $(uptime) "
+          echo "6.TOP 10 PROCESSES:"
+          ps aux --sort -%mem | head -n 11
+        register: cpu
+      - debug: var=cpu.stdout_lines
+
+      - name: Check GPU
+        shell:  |
+          echo "GPU: $(lspci | grep -E '3D|VGA')"
+        register: gpu
+      - debug: var=gpu.stdout_lines
+
+      - name: motherboard
+        shell:  dmidecode -t 2 | grep 'Product'
+        become: yes
+        register: motherboard
+      - debug:  var=motherboard.stdout_lines
+
+  - name: Check confidence
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: confidence
+    tasks:
+
+      - name: number of visits for today
+        shell: zgrep 'confidence is' /var/log/syslog | grep -v "None" | awk '{print $1,$2,$3,$NF}' | wc -l
+        register: today_visits
+      - debug:  var=today_visits.stdout
+
+      - name: today
+        shell: zgrep 'confidence is' /var/log/syslog | tail -n 25
+        register: today_confidence
+      - debug:  var=today_confidence.stdout_lines
+
+      - name: date
+        shell: date
+        register: date
+      - debug:  var=date.stdout
+
+      - name: visits per whole week (except today)
+        shell:  zgrep 'confidence is' /var/log/syslog.* | wc -l
+        register: visits
+      - debug:  var=visits.stdout
+
+      - name: threshold
+        shell: zgrep 'confidence is' /var/log/syslog.* /var/log/syslog | grep -m 1 -oE "threshold is 0\.[0-9]{2}" | awk '{print $NF}'
+        register: threshold
+      - debug:  var=threshold.stdout
+
+      - name: everything
+        shell:  zgrep 'confidence is' /var/log/syslog.* /var/log/syslog | grep -v 'None' | awk '$NF>={{threshold.stdout}}{print $1,$2,$3,$NF}'
+        register: all_confidence
+      - debug:  var=all_confidence.stdout_lines
+
+      - name: number of srabotok per week
+        shell:  zgrep 'confidence is' /var/log/syslog.* /var/log/syslog | grep -v 'None' | awk '$NF>={{threshold.stdout}}{print $1,$2,$3,$NF}' | wc -l
+        register: srabotki
+      - debug:  var=srabotki.stdout_lines
+
+  - name: Check sshl errors
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: errors
+    tasks:
+
+      - name: errors
+        shell: journalctl -a --since "60min ago"| grep ERROR | tail -n 100
+        register: last_100_errors
+      - debug:  var=last_100_errors.stdout_lines
+
+      - name: err stat
+        shell: |
+          echo "1.NETWORK"
+          echo "ERROR_COMMUNICATION: $(zgrep 'ERROR_COMMUNICATION' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "Link is down(net_interface): $(zgrep -a "Link is Down" /var/log/kern.log*|grep -c .)"
+          echo ""
+          echo "2.NTLS"
+          echo "FAILED_TO_CONNECT_TO_NTLS: $(zgrep 'Failed to connect to NTLS' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "HTTP 599(unlift): $(journalctl -u unlift.service | grep 'HTTP 599' | wc -l)"
+          echo ""
+          echo "3.CAMERA"
+          echo "No_route_to_host: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'No route to host' | wc -l)"
+          echo "401 Unauthorized: $(zgrep '401 Unauthorized' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "DECODE_ERRORS: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'decoder_soft_errors' | wc -l)"
+          echo ""
+          echo "4.GPU"
+          echo "GPU_ERRORS: $(journalctl -u findface-video-worker-gpu.service | grep 'ERROR' | wc -l) "
+          echo ""
+          echo "5.Hardware timeout"
+          echo "TIMEOUT_WAS_REACHED: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'Timeout was reached' | wc -l)"
+          echo "----------------------------"
+          echo "ITOGO_OSHIBOK_ZA_NEDELU: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | wc -l)"
+        register: err_stat
+        ignore_errors:  true
+      - debug:  var=err_stat.stdout_lines
+  
+  - name: apt install packages
+    hosts: all
+    gather_facts: false
+    tags: install
+    vars:
+      ubuntu_release: bionic
+      balancer: '5.252.193.80'
+    become: yes
+    tasks:
+
+      - name: access
+        shell:  nc -w1 -vz archive.ubuntu.com 80
+        register: access
+      - debug:  var=access.stderr_lines
+
+      - block:
+          - name: nslookup ubuntu rep
+            shell:  nslookup archive.ubuntu.com
+            register: arch
+            become: yes
+          - debug:  var=arch.stdout
+
+        rescue:
+          - name: nmcli dns
+            shell:  |
+              nmcli con mod 'Wired connection 1' ipv4.dns 8.8.8.8
+              nmcli con mod 'Проводное подключение 1' ipv4.dns 8.8.8.8
+              nmcli con mod 'Wired connection 2' ipv4.dns 8.8.8.8
+              nmcli con mod 'Проводное подключение 2' ipv4.dns 8.8.8.8
+            ignore_errors:  yes
+        
+          - name: restart resolver
+            systemd:
+              name: systemd-resolved
+              state:  restarted
+            ignore_errors:  yes
+
+          - name: restart resolver
+            reboot:
+      
+      - name: nslookup ya.ru
+        shell:  nslookup archive.ubuntu.com
+        register: nslookup
+      - debug:  var=nslookup.stdout_lines
+
+      - name: touch /etc/apt/sources.list
+        file:
+          path: /etc/apt/sources.list
+          state:  absent
+
+      - name: touch /etc/apt/sources.list
+        file:
+          path: /etc/apt/sources.list
+          state:  touch
+
+      - name: fill /etc/apt/sources.list
+        lineinfile:
+          path: /etc/apt/sources.list
+          line: '{{item}}'
+        with_items:
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}} main restricted'
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}}-updates main restricted'
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}} universe'
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}}-updates universe'
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}} multiverse'
+          - 'deb http://us.archive.ubuntu.com/ubuntu/ {{ubuntu_release}}-updates multiverse'
+          - 'deb http://security.ubuntu.com/ubuntu {{ubuntu_release}}-security main restricted'
+          - 'deb http://security.ubuntu.com/ubuntu {{ubuntu_release}}-security universe'
+          - 'deb http://security.ubuntu.com/ubuntu {{ubuntu_release}}-security multiverse'
+
+
+      - name: remove other sources
+        file:
+          path: /etc/apt/sources.list.d
+          state:  absent
+        with_items:
+          - '/etc/apt/sources.list.d'
+          - '/etc/apt/sources.list.distUpgrade'
+
+      - name: apt update
+        apt:
+          update_cache: yes
+
+      - name: input package name
+        pause:
+          prompt: "Input package name to install:"
+        register: package
+      - debug:  var=package.user_input
+
+      - name: apt install 
+        apt:
+          name: '{{package.user_input}}'
+          state:  latest
+
+                
+
+  - name: get current info of PC
+    hosts:  all
+    gather_facts: False
+    become: yes
+    ignore_errors:  True
+    vars:
+      services:
+        - findface-extraction-api
+        - findface-facerouter
+        - findface-sf-api
+        - findface-video-manager
+        - findface-video-worker-cpu
+        - findface-video-worker-gpu
+        - findface-counter
+        - memcached
+        - unlift
+        - unlift-updater
+        - etcd
+        - bit-alert
+        - bit-radio
+    tags: current
+    tasks:
+
+      - name: hardware
+        shell:  |
+          echo "CPU: $(cat /proc/cpuinfo | grep -E 'Intel|intel|core'| grep -oE "[0-9]{1,2}th.*" -m 1)"
+          echo "GPU: $(lspci | grep -E '3D|VGA')"
+          echo "RAM:  $(( $(cat /proc/meminfo | grep MemTotal | grep -oE '[0-9]{1,15}')/1024))Mb"
+          sudo dmidecode -t 2 | grep Product | sed 's/Product Name/Motherboard/g' | sed 's/\t/''/'
+          echo "DISK: $(udisksctl status | grep -E 'nvme|sda')"
+        register: hardware
+      - debug:  var=hardware.stdout
+
+      - name: services
+        shell:  systemctl is-active '{{item}}'
+        register: service_status
+        with_items:
+          - '{{services | list}}'
+      - debug:  msg="{{ service_status | json_query('results[*].[item,stdout]') }}"   #print out several JSON properties from ansible output , which related to each other - [item,stdout]
+
+      - name: check token
+        shell:  |
+          unlift_token=$(cat /etc/unlift.ini | grep token | grep -oE "[0-9][a-z]{10}")
+          unlift-updater_token=$(cat /etc/unlift-updater.ini | grep token | grep -oE "[0-9][a-z]{10}")
+          echo "UNLIFT token: $unlift_token"
+          echo "UNLIFT-UPDATER token: $unlift-updater_token"
+        register: token
+      - debug:  var=token.stdout_lines
+
+      - name: errors
+        shell:  journalctl -a --since "60min ago"| grep ERROR | tail -n 20
+        register: errors
+      - debug:  var=errors.stdout
+
+  - name: get current info of PC
+    hosts:  all
+    gather_facts: False
+    become: yes
+    #ignore_errors:  True
+    tags: alert
+    tasks:
+
+      # - name: Xorg(if not empty = Desktop)
+      #   shell:  which Xorg
+      #   register: xorg
+      #   failed_when: xorg.stdout_lines == ''
+      # - debug:  var=xorg.stdout_lines
+
+      # - name: monitor check
+      #   shell:  xrandr
+      #   register: monitor
+      #   failed_when: monitor.stdout_lines != "Can't open display"
+      # - debug:  var=monitor.stdout_lines
+
+      - name: alert processes
+        shell:  ps aux | grep bit-alert
+        register: proc
+      - debug:  var=proc.stdout_lines
+
+      - name: alert connection
+        shell:  curl http://localhost:5477/hub/visit
+        register: al_con
+      - debug:  var=al_con.stdout
+
+      - name: assert
+        assert:
+          that:
+            - al_con.stdout == "Connection ID required"
+          fail_msg: "Connection between alert client and server is broken"
+        
+  - name: get current info of PC
+    hosts:  all
+    gather_facts: False
+    ignore_errors:  true
+    become: yes
+    vars:
+      rtsp_list:
+        - "/live/main"
+        - "/h264"
+        - "/H264?ch=1&subtype=0"
+        - "/ISAPI/Streaming/Channels/101"
+        - "/cam/realmonitor?channel=1&subtype=0"
+        - "/ch01/0"
+        - "/stream1"
+        - "/Streaming/Channels/1"
+        - "/h264Preview_01_main"
+        - "/av0_0"
+        - ":554/Streaming/Channels/101"
+        - "/live.sdp"
+        - "/onvif1"
+        - ""
+    tags: rtsp
+    tasks:
+
+      #ping cams
+      - name: get ip cams
+        shell:  curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url"|sed "s%rtsp://%%"|cut -d ":" -f1,2|cut -d "." -f1,2,3,4|cut -d "/" -f1 | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: ip_cams
+      - debug:  var=ip_cams.stdout_lines
+
+      - name: ping
+        shell:  ping -c 4 '{{item}}'
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #netcat
+      - name: netcat 554
+        shell:  nc -w1 -vz {{item}} 554
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #rtsp
+
+      - name: get clean rtsp
+        shell:  curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url" | grep -oE "^.*\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: rtsp_clean
+      - debug:  var=rtsp_clean.stdout_lines
+
+      - name: current rtsp
+        shell:  curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url"
+        register: current_rtsp
+      - debug:  var=current_rtsp.stdout_lines
+
+
+
+      - name: rtsp
+        shell:  |
+          for base in $(curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url"|sed "s%rtsp://%%"|cut -d ":" -f1,2|cut -d "." -f1,2,3,4|cut -d "/" -f1)
+          do
+          #echo $base
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base" -vframes 1 -q:v 2 sample_frame1.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/live/main" -vframes 1 -q:v 2 sample_frame2.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/h264" -vframes 1 -q:v 2 sample_frame3.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/H264?ch=1&subtype=0" -vframes 1 -q:v 2 sample_frame4.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/ISAPI/Streaming/Channels/101" -vframes 1 -q:v 2 sample_frame5.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/cam/realmonitor?channel=1&subtype=0" -vframes 1 -q:v 2 sample_frame6.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/ch01/0" -vframes 1 -q:v 2 sample_frame7.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/stream1" -vframes 1 -q:v 2 sample_frame8.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/Streaming/Channels/1" -vframes 1 -q:v 2 sample_frame9.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/h264Preview_01_main" -vframes 1 -q:v 2 sample_frame10.jpg
+          ffmpeg -nostats -loglevel 0 -y -i "rtsp://$base/av0_0" -vframes 1 -q:v 2 sample_frame11.jpg
+          )
+          (rtsp=`ls -1|grep sample_frame|head -n1`
+          case "$rtsp" in
+              sample_frame1.jpg ) echo "rtsp://$base";;
+              sample_frame2.jpg ) echo "rtsp://$base/live/main";;
+              sample_frame3.jpg ) echo "rtsp://$base/h264";;
+              sample_frame4.jpg ) echo "rtsp://$base/H264?ch=1&subtype=0";;
+              sample_frame5.jpg ) echo "rtsp://$base/ISAPI/Streaming/Channels/101";;
+              sample_frame6.jpg ) echo "rtsp://$base/cam/realmonitor?channel=1&subtype=0";;
+              sample_frame7.jpg ) echo "rtsp://$base/ch01/0";;
+              sample_frame8.jpg ) echo "rtsp://$base/stream1";;
+              sample_frame9.jpg ) echo "rtsp://$base/Streaming/Channels/1";;
+              sample_frame10.jpg ) echo "rtsp://$base/h264Preview_01_main";;
+              sample_frame11.jpg ) echo "rtsp://$base/av0_0";;
+          esac)
+          done
+          )> /tmp/final
+          final=`cat /tmp/final`
+          #echo $final
+          orig=`curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url"`
+          if [[ "$orig" != "$final" ]]
+          then echo $final
+          fi
+        register: rtsp
+        failed_when: "rtsp.stdout != ''"
+        ignore_errors: true
+      - debug:  var=rtsp.stdout
+
+
+      - name: check
+        shell:  ffmpeg -rtsp_transport tcp -t 10 -i "{{item.0}}{{item.1}}"   -vcodec copy -an test.mp4 -y
+        #shell: echo "{{item.0}}{{item.1}}"
+        with_nested:
+          - "{{rtsp_clean.stdout_lines}}"
+          - "{{rtsp_list}}"
+        ignore_errors:  true
+
+  - name: fix SSHL bug
+    hosts:  all
+    gather_facts: False
+    become: yes
+    ignore_errors:  True
+    tags: fix
+    tasks:
+
+      - name: number of visits for today
+        shell: zgrep 'confidence is' /var/log/syslog | grep -v "None" | awk '{print $1,$2,$3,$NF}' | wc -l
+        register: today_visits
+      - debug:  var=today_visits.stdout
+
+      - name: stop jobs
+        shell:  curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|(.id)"|while read i;do curl -X DELETE http://127.0.0.1:18810/job/$i;done
+        register: jobs
+      - debug:  var=jobs.stdout_lines
+
+      - name: reboot
+        reboot:
+
+      - name: sleep 15
+        shell:  sleep 30
+
+      - name: number of visits for today
+        shell: zgrep 'confidence is' /var/log/syslog | grep -v "None" | awk '{print $1,$2,$3,$NF}' | wc -l
+        register: today_visits_1
+      - debug:  var=today_visits_1.stdout
+
+      - name: Set cron
+        cron:
+          minute: 0
+          hour: 6
+          day:  "*"
+          month:  "*"
+          weekday:  "*"
+          job:  'curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|(.id)"|while read i;do curl -X DELETE http://127.0.0.1:18810/job/$i;done; sudo reboot'
+          state:  present
+
+
+  - name: test sound on Ubuntu
+    hosts:  all
+    gather_facts: False
+    become: yes
+    tags: test_sound
+    tasks:
+
+      - name: play 5 times /opt/unlift/unlift_proxy/warning.mp3
+        shell:  |
+          for i in {0..200}}
+          do
+            sudo ffprobe /opt/unlift/unlift_proxy/warning.mp3
+            sleep 5
+          done
+
+  - name: speedtest by new balancer
+    hosts:  all
+    gather_facts: False
+    become: yes
+    tags: speedtest
+    tasks:
+
+      # - block:
+      #     - name: check if new balancer
+      #       shell:  nslookup shard
+
+      #   rescue:
+
+      #     - name: check if new balancer
+      #       shell:  cat /etc/hosts
+      #       register: hosts
+      #     - debug:  var=hosts.stdout_lines
+
+      - name: download
+        shell:  curl -O http://shard:8101/speedtest/download/50m
+        register: download_speed
+      - debug:  var=download_speed.stderr_lines
+
+      - name: upload
+        shell:  curl -O  -F "file=@50m" http://shard:8101/speedtest/upload
+        register: upload_speed
+      - debug:  var=upload_speed.stderr_lines
+
+
+
+#TIMEZONE
+  - name: tz_msk
+    hosts:  all
+    gather_facts: False
+    become: yes
+    tags: tz_msk
+    tasks:
+
+      - name: check timezone
+        shell:  timedatectl | grep -oE '.*/.*' | tr -d ' '
+        register: tz1
+      - debug:  var=tz1.stdout_lines
+
+      - name: check
+        fail:
+          msg:  "THE CURRENT ZONE IS ALREADY - MOSCOW"
+        when: tz1.stdout_lines is match(".*Moscow.*")
+
+      - name: check timezone
+        shell:  timedatectl set-timezone Europe/Moscow; sudo hwclock --systohc
+
+      - name: reboot
+        reboot:
+        
+      - name: check timezone
+        shell:  |
+          echo "DATE: $(date)"
+          echo "TIMEZONE: $(timedatectl | grep -oE '.*/.*' | tr -d ' ' | sed 's/Timezone://g')"
+        register: tz2
+      - debug:  var=tz2.stdout_lines
+
+#POST
+  - name: post
+    hosts:  all
+    gather_facts: False
+    become: yes
+    ignore_errors:  true
+    tags: post
+    tasks:
+
+      - name: download
+        shell:  |
+          echo "-----------HARDWARE/OS-------------"
+          echo "VIDEOCARD: $(lspci | grep -E '3D|VGA')"
+          echo "DISK SPACE(occupied): $(df -h / | grep -oE '[0-9]{1,3}%')"
+          echo "-----------SOFTWARE-------------"
+          echo "findface-video-worker-CPU: $(systemctl is-active findface-video-worker-cpu)"
+          echo "findface-video-worker-GPU: $(systemctl is-active findface-video-worker-gpu)"
+          echo "NTLS: $(cat /etc/findface-extraction-api.ini | grep ntls | awk '{print $NF}')"
+          echo "TOKEN: $(cat /etc/unlift.ini | grep unlift_token | awk -F '=' '{print $2}')"
+          echo "UPDATER-TOKEN: $(cat /etc/unlift-updater.ini | grep token | awk '{print $NF}')"
+          echo "-----------TIME-------------"
+          echo "DATE: $(date)"
+          echo "TIMEZONE: $(timedatectl | grep -oE '.*/.*' | tr -d ' ' | sed 's/Timezone://g')"
+          echo "-----------BIOS-------------"
+          echo "SECURE_BOOT: $(mokutil --sb-state)"
+          echo "POWER_LOSS: $(cat /sys/class/rtc/rtc0/device/power/wakeup)"
+        #  echo "ALERT: $(cat /opt/bit/bit-alert-client/bit-alert-client.dll)"
+        register: info
+      - debug:  var=info.stdout_lines
+
+
+  #       register: download_speed
+  #     - debug:  var=download_speed.stderr_lines
+
+
+  - name: harware information
+    hosts:  all
+    gather_facts: false
+    tags: hw_sum
+    become: true
+    tasks:
+
+      - name: monitor script
+        shell: |
+          hardware_disk=`udisksctl  status|grep -v MODEL|grep -v "\-\-"|column -t|awk '{print $1,$2}'|head -n1`
+          hardware_cpu=`cat /proc/cpuinfo |grep "model name"|tail -n1|cut -d ":" -f2`
+          hardware_memory=`sudo lshw -c memory| grep -A 8 "bank:" | grep -o "product.*"|cut -d ":" -f2|tr -s "\n" ","|sed 's/,$//'`
+          hardware_mb=`sudo lshw|grep -A2 Mother|grep -o "product.*"|cut -d ":" -f2`
+          echo "DISK: $hardware_disk | CPU: $hardware_cpu | RAM: $hardware_memory | MOTHERBOARD: $hardware_mb"
+        register: summary
+      - debug:  var=summary.stdout_lines
+
+  - name: alsa settings
+    hosts:  all
+    gather_facts: False
+    tags: alsa
+    become: yes
+    vars:
+      volume: 100
+    # vars_prompt:
+    #   - name: volume
+    #     prompt: "Enter VOLUME LVL in %: 100 / 75 / 50"
+    #     private: no
+    tasks:
+
+      - name: check timezone
+        shell:  |
+          # 6 channels (6ch in alsamixer)
+          sudo amixer set 'Channel Mode' '6ch'
+
+          # Unmute and set volume for all channels
+          for simple_controler in $(sudo amixer scontrols | grep -oE "'.*'" | grep -vE "Auto-Mute" | sed "s/'//g")
+          do
+                  sudo amixer set $simple_controler unmute
+                  sudo amixer set $simple_controler {{ volume }}%
+          done
+
+          # Auto-Mute Mode disabled
+          sudo amixer set 'Auto-Mute Mode' 'Disabled'
+
+          # save sound settings after reboot
+          sudo alsactl store
+          echo "Audio channels unmuted and set to {{ volume }}% volume."
+        register: snd_settings
+      - debug:  var=snd_settings.stdout_lines
+
+  - name: Check Desktop or Server ubuntu
+    hosts: all
+    gather_facts: false
+    tags: is_desktop
+    become: yes
+    tasks:
+      - name: Check for common desktop packages
+        shell: |
+          dpkg -l | grep -E "ubuntu-desktop|gnome-shell|gdm3|lightdm|nautilus|gnome-terminal|firefox|libreoffice"
+        register: desktop_packages_check
+        ignore_errors: yes
+
+      - name: Determine system type
+        set_fact:
+          ubuntu_type: "{{ 'Desktop' if desktop_packages_check.rc == 0 else 'Server' }}"
+
+      - name: Display the result
+        debug:
+          msg: "{{ ubuntu_type }}"
+
+
+
+
+  - name: "Set up a cron job to run every 3 months"
+    hosts: all
+    gather_facts: false
+    tags: self_clean
+    become: yes
+    tasks:
+      - name: "Clean disk"
+        ansible.builtin.cron:
+          name: "Autoclean"
+          minute: "0"
+          hour: "0"
+          day: "1"
+          month: "*/3"  # Every 3 months (Jan, Apr, Jul, Oct)
+          job: 'find /opt/unlift/unlift_proxy/ -maxdepth 1 -type d -name "20[0-9][0-9][0-1][0-9][0-3][0-9]" -mtime +365 -exec rm -rf {} +'
+          user: "root"  # Replace with the desired user
+
+
+  - name: TLS
+    hosts: all
+    gather_facts: false
+    tags: tls
+    become: yes
+    tasks:
+
+      - name: TLS unlift 185.158.114.149
+        shell:  curl -kv https://185.158.114.149 2>&1
+        register: tls_1
+      - debug:  var=tls_1.stdout_lines
+
+      - name: TLS unlift 5.252.195.77
+        shell:  curl -kv https://5.252.195.77 2>&1
+        register: tls_2
+      - debug:  var=tls_2.stdout_lines
+
+      - name: TLS unlift 176.114.69.107 (bitrun)
+        shell:  curl -kv https://176.114.69.107 2>&1
+        register: tls_3
+      - debug:  var=tls_3.stdout_lines
+
+
+  - name: mtr
+    hosts: all
+    gather_facts: false
+    tags: mtr
+    become: yes
+    tasks:
+
+      - name: balancer
+        shell:  cat /etc/hosts | grep face452 | awk '{print $1}'
+        register: balanc
+      - debug:  var=balanc.stdout_lines
+
+      - name: unlift
+        shell:  cat /etc/hosts | grep unlift.ru | awk '{print $1}'
+        register: unlift
+      - debug:  var=unlift.stdout_lines
+
+      - name: trassir
+        shell:  |
+          mtr --no-dns -r -c 300 --tcp --port 8104 {{balanc.stdout}}
+          sleep 5
+          echo "--------------------------------------------------"
+          mtr --no-dns -r -c 300 --tcp --port 443 {{unlift.stdout}}
+        register: trass
+      - debug:  var=trass.stderr_lines
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#---------------------------------------------------------DOCKER-------------------------------------------------------------------------------
+#RAW - for compatibility  
+  
+  - name: docker ff status(URI)
+    hosts: all
+    gather_facts: false
+    tags: dc_wget
+    tasks:
+      - name: Fetch content from URL
+        raw:  wget -qO - http://127.0.0.1:8888/v2/dbg
+        register: wget
+      - debug:  var=wget.stdout_lines
+
+  - name: docker information
+    hosts:  all
+    gather_facts: false
+    tags: dc_info
+    become: true
+    tasks:
+
+      - name: docker version
+        shell: |
+          echo "UBUNTU_RELEASE: $(lsb_release -r | grep -oE "[0-9]{2}.[0-9]{2}")"
+          echo "DOCKER version: $(docker --version)"
+          echo "DOCKER-COMPOSE version: $(docker-compose --version)"
+        register: docker_version
+      - debug:  var=docker_version.stdout_lines
+
+      - name: docker containers
+        shell:  docker ps -a
+        register: docker_containers
+      - debug:  var=docker_containers.stdout_lines
+
+  - name: docker-compose restart
+    hosts:  all
+    gather_facts: false
+    tags: dc_restart
+    become: true
+    tasks:
+
+      - name: docker-compose down
+        shell: |
+          docker-compose down
+          docker ps -a
+        register: containers_1
+      - debug:  var=containers_1.stdout_lines
+
+      - name: docker version
+        shell: |
+          docker-compose up -d
+          docker ps
+        register: containers_2
+      - debug:  var=containers_2.stdout_lines
+
+
+  - name: docker compute rtsp
+    hosts:  all
+    tags: dc_rtsp
+    gather_facts: False
+    ignore_errors:  true
+    become: yes
+    vars:
+      rtsp_list:
+        - "/live/main"
+        - "/h264"
+        - "/H264?ch=1&subtype=0"
+        - "/ISAPI/Streaming/Channels/101"
+        - "/cam/realmonitor?channel=1&subtype=0"
+        - "/ch01/0"
+        - "/stream1"
+        - "/Streaming/Channels/1"
+        - "/h264Preview_01_main"
+        - "/av0_0"
+        - ":554/Streaming/Channels/101"
+        - ""
+    tasks:
+
+      #ping cams
+      - name: get ip cams
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | grep -v "127.0.0.1"
+        register: ip_cams
+      - debug:  var=ip_cams.stdout_lines
+
+
+      - name: ping
+        raw:  ping -c 4 '{{item}}'
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #netcat
+      - name: netcat 554
+        raw:  nc -w1 -vz {{item}} 554
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #rtsp
+
+      - name: get clean rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "rtsp://.*:.*@\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: rtsp_clean
+      - debug:  var=rtsp_clean.stdout_lines
+
+      - name: current rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "rtsp://.*:.*@\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: current_rtsp
+      - debug:  var=current_rtsp.stdout_lines
+
+      - name: check
+        raw:  docker run --network=host -it jrottenberg/ffmpeg -rtsp_transport tcp -t 10 -i "{{item.0}}{{item.1}}" -vcodec copy -an test.mp4 -y
+        #shell: echo "{{item.0}}{{item.1}}"
+        with_nested:
+          - "{{rtsp_clean.stdout_lines}}"
+          - "{{rtsp_list}}"
+        ignore_errors:  true
+
+    
+
+#wget -qO - http://127.0.0.1:18810/jobs | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | grep -v "127.0.0.1"

@@ -1,0 +1,95 @@
+---
+- name: convert your script to systemd service
+  hosts:  all
+  become: true
+  vars:
+    service_name: zaylik
+    local_path_script: /mnt/distr/ansible/zaylik.sh
+  tasks:
+
+#copy script
+    - name: copy files
+      copy:
+        src: '{{local_path_script}}'
+        dest: /home/{{ansible_user}}/{{service_name}}.sh
+
+    - name: chmod +x
+      file:
+        path: /home/{{ansible_user}}/{{service_name}}.sh
+        mode: '0770'
+
+    - name: mkdir opt
+      file:
+        path: /opt/{{service_name}}
+        state:  directory
+        owner:  "{{ansible_user}}"
+        group:  "{{ansible_user}}"
+        mode: '0770'
+
+    - name: copy to opt
+      copy:
+        src:  /home/{{ansible_user}}/{{service_name}}.sh
+        dest: /opt/{{service_name}}/
+        remote_src: true
+
+    - name: copy to opt
+      file:
+        path: /opt/{{service_name}}/{{service_name}}.sh
+        owner:  "{{ansible_user}}"
+        group:  "{{ansible_user}}"
+        mode: '0770'
+
+#create systemd files and logs
+
+    - name: touch /etc/systemd/system/service_name.service
+      file:
+        path: /etc/systemd/system/{{service_name}}.service
+        state:  absent
+
+    - name: touch /etc/systemd/system/service_name.service
+      file:
+        path: /etc/systemd/system/{{service_name}}.service
+        owner:  "{{ansible_user}}"
+        group:  "{{ansible_user}}"
+        mode: '0770'
+        state:  touch
+
+    - name: fill systemd file
+      lineinfile:
+        path: /etc/systemd/system/{{service_name}}.service
+        line: "{{item}}"
+      with_items:
+        - "[Unit]"
+        - "Description={{service_name}} service"
+        - "After=network-online.target"
+        - ""
+        - "[Service]"
+        - "ExecStart=/bin/bash -c /opt/{{service_name}}/{{service_name}}.sh"
+        - ""
+        - "[Install]"
+        - "WantedBy=multi-user.target"
+
+    # - name: touch /etc/systemd/system/service_name.service
+    #   file:
+    #     path: /var/log/{{service_name}}.log
+    #     owner:  "{{ansible_user}}"
+    #     group:  "{{ansible_user}}"
+    #     mode: '0770'
+    #     state:  touch
+
+#launch service by systemd
+
+    - name: reload
+      shell:  systemctl daemon-reload
+
+    - name: restart service
+      systemd:
+        name: '{{service_name}}'
+        state:  restarted
+
+    - name: systemctl status
+      shell:  systemctl status {{service_name}}
+      register: checky
+    - debug:  var=checky.stdout_lines
+
+      

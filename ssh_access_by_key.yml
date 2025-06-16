@@ -1,0 +1,35 @@
+---
+- name: Set up SSH access using public key
+  hosts: all                  # This should be defined in your inventory
+  become: yes                           # Use this if you need to perform tasks with sudo
+  vars:
+    ssh_key_path: "~/.ssh/id_rsa"      # Path to the SSH private key
+    ssh_public_key_path: "{{ ssh_key_path }}.pub"  # Path to the SSH public key
+
+  tasks:
+    - name: Ensure SSH server is installed
+      package:
+        name: openssh-server
+        state: present
+
+    - name: Create the .ssh directory for the user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.ssh"
+        state: directory
+        mode: "0700"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Install public key in authorized_keys
+      ansible.builtin.copy:
+        src: "{{ ssh_public_key_path }}"
+        dest: "/home/{{ ansible_user }}/.ssh/authorized_keys"
+        mode: "0600"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Ensure SSH service is running
+      ansible.builtin.service:
+        name: ssh
+        state: started
+        enabled: yes

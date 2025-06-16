@@ -1,0 +1,39 @@
+---
+- name: Set up auto-login on Ubuntu with gdm3
+  hosts: all
+  become: yes
+  vars:
+    user_to_auto_login: "detect"
+
+  tasks:
+    - name: Install necessary packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - gdm3
+        - gnome-control-center
+
+    - name: Set auto-login user
+      lineinfile:
+        path: /etc/gdm3/custom.conf
+        line: "{{item}}"
+        insertafter:  "^#WaylandEnable=.*"
+        state:  present
+      with_items:
+        - "AutomaticLoginEnable = true"
+        - "AutomaticLogin={{ user_to_auto_login }}"
+
+    - name: replace waland
+      replace:
+        path: /etc/gdm3/custom.conf
+        regexp: '#Wayland.*'
+        replace:  'WaylandEnable=false'
+
+    - name: Restart gdm3 service
+      service:
+        name: gdm3
+        state: restarted
+
+    - name: reboot
+      reboot:

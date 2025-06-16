@@ -1,0 +1,75 @@
+---
+- name: connect to windows smb folder from linux
+  hosts: all
+  vars:
+    share_name: distr
+    smb_linux_path: /mnt/{{share_name}}
+    smb_win_remote_ip_host: 192.168.10.138
+    smb_win_remote_user:  detect
+    smb_win_remote_pass:  detect-pwd
+  tasks:
+
+#1)apt packs
+    - name: apt update
+      apt:
+        update-cache: yes
+      become: true
+      ignore_errors:  true
+
+    - name: sudo apt install smb-client -y
+      apt:
+        name: '{{item}}'
+        state:  latest
+      become: true
+      with_items:
+        - cifs-utils
+        - smbclient
+
+#2)create file .smb
+    - name: rm .smbcredentials
+      file:
+        path: /home/{{ansible_user}}/.smbcredentials
+        state:  absent
+
+
+    - name: touch .smbcredentials
+      file:
+        path: /home/{{ansible_user}}/.smbcredentials
+        state:  touch
+
+    - name: fill .smbcredentials
+      shell: echo '{{item}}' | tee -a /home/{{ansible_user}}/.smbcredentials
+      with_items:
+        - "username={{smb_win_remote_user}}"
+        - "password={{smb_win_remote_pass}}"
+
+    - name: create mount folder
+      file:
+        path: '{{smb_linux_path}}'
+        state:  directory
+        owner: '{{ansible_user}}'
+        group:  '{{ansible_user}}'
+        mode: '0770'
+      become: true
+
+
+#3)/etc/fstab fill
+
+    - name: fill /etc/fstab
+      lineinfile:
+        path: /etc/fstab
+        line: "//{{smb_win_remote_ip_host}}/{{share_name}} {{smb_linux_path}} cifs user,rw,credentials=/home/{{ansible_user}}/.smbcredentials,uid={{ansible_user}},gid={{ansible_user}}	0	0"
+        insertafter: '^EOF'
+        state:  present
+      become: true
+
+
+    - name: reboot
+      reboot:
+      become: true
+
+    - name: ls
+      shell:  ls -lah {{smb_linux_path}}
+      register: smb_path
+    - debug:  var=smb_path.stdout_lines
+

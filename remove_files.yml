@@ -1,0 +1,66 @@
+---
+- name: find and download any file in the system
+  hosts: all
+  become: true
+  tasks:
+
+#FIND
+    - name: examples
+      shell: echo "{{item}}"
+      register: options
+      with_items:
+        - '.*dek.*          - blind search by sequence inside any part of path'
+        - '.*dek[0-9].*     - /home/detect/dek1 /home/detect/dek2'
+        - '^/mnt.*lenta.*   - file inside some folder'
+        - '.*lenta.*\.yml$  - by filename + extension'
+        - '^/home.*b.*at   - all filenames what ends up like this(not folders, only finite files)'
+
+    - name: print pattern
+      pause:
+        prompt: 'Print patterns(.* instead *) - .*hddtemp.* '
+      register: pat
+    - debug:  var=pat.user_input
+
+# find / and delete files
+    - name: find files
+      shell: find / -regex "{{pat.user_input}}" #| sudo xargs rm -r
+      register: outp
+      failed_when:  outp.stdout_lines == ""
+    - debug:  var=outp.stdout_lines
+
+
+#GET INFO
+
+    - name: du -sh
+      shell: du -sh "{{item}}"
+      register: volumess
+      with_items:
+        - '{{outp.stdout_lines | list}}'
+    - debug:
+        msg:  "{{item.stdout}}"
+      with_items: '{{volumess.results}}'
+    #- debug:  msg="{{ volume | json_query('results[*].[item,stdout]') }}"
+
+#CONFIRM
+    - name: confirm
+      pause:
+        prompt: "Are you sure you want to delete all these files?(Press Y to proceed)"
+      register: confirmation
+    - debug:  var=confirmation.user_input
+
+#REMOVE
+    - name: clear
+      file:
+        path: '{{item}}'
+        state:  absent
+      when: confirmation.user_input =='y' or confirmation.user_input =='Y'
+      with_items:
+        - '{{outp.stdout_lines | list}}'
+
+
+#CHECK
+    - name: find files
+      shell: find / -regex "{{pat.user_input}}" #| sudo xargs rm -r
+      register: outp1
+      failed_when:  outp1.stdout_lines == ""
+    - debug:  var=outp1.stdout_lines
