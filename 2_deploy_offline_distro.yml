@@ -1,0 +1,53 @@
+---
+- name: deploy offline distro
+  hosts:  all
+  vars_prompt:
+    - name: apt_package_name
+      prompt: "Enter APT_PACKAGE_NAME for folder(nginx):"
+      private: no
+    - name: offline_distro_arch
+      prompt: "Enter ARHIVE FILE name(nginx-offline-distro.tar.gz):"
+      private: no
+  vars:
+    offline_distro_dir: '/mnt/distr/'
+  tasks:
+
+    - name: copy
+      copy:
+        src:  '{{offline_distro_dir}}/{{offline_distro_arch}}'
+        dest: /home/{{ansible_user}}/
+
+    - name: unzip
+      unarchive:
+        src: /home/{{ ansible_user }}/{{offline_distro_arch}}
+        dest: /var/lib/
+        remote_src: yes
+      become: true
+
+    - name: move && clean sources
+      shell:  |
+        mv /etc/apt/sources.list.d/ubuntu.sources /home/{{ansible_user}}/
+        rm /etc/apt/sources.list.d/*
+        mv /etc/apt/sources.list /home/{{ansible_user}}/
+      become: true
+      ignore_errors:  true
+
+    - name: create list
+      shell:  echo "deb [trusted=yes] file:/var/lib/{{apt_package_name}} ./" | sudo tee -a /etc/apt/sources.list.d/{{apt_package_name}}.list
+      become: true
+
+    - name: apt
+      apt:
+        name: '{{apt_package_name}}'
+        state:  present
+        update_cache: yes
+#      ignore_errors:  true
+      become: true
+
+    - name: check
+      shell:  dpkg -l | grep "{{apt_package_name}}"
+      register: checky
+    - debug:  var=checky.stdout_lines
+
+
+    

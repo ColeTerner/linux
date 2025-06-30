@@ -1,0 +1,56 @@
+---
+- name: create offline repo
+  hosts:  all
+  vars_prompt:
+    - name: apt_package_name
+      prompt: "Enter apt package name(nginx,ntp):"
+      private: no
+  tasks:
+
+    - name: apt dev packages install
+      apt:
+        name: '{{item}}'
+        state:  present
+      become: true
+      with_items:
+#        - 'software-preperties-common'
+        - 'dpkg-dev'
+        - 'apt-rdepends'
+
+    - name: mkdir
+      file:
+        path: /home/{{ansible_user}}/{{apt_package_name}}
+        state:  directory
+        owner:  '{{ansible_user}}'
+        group:  '{{ansible_user}}'
+        mode: '0755'
+
+    - name: depends
+      shell:  |
+        cd /home/{{ansible_user}}/{{apt_package_name}}
+        apt-rdepends {{apt_package_name}} | grep -v "^ " | xargs -n1 apt download
+      ignore_errors:  true
+    
+    - name: dpkg scan
+      shell:  cd /home/{{ansible_user}}/{{apt_package_name}} && dpkg-scanpackages -m . | gzip -c > Packages.gz
+
+
+    - name: archive
+      archive:
+        path: /home/{{ansible_user}}/{{apt_package_name}}
+        dest: /home/{{ansible_user}}/{{apt_package_name}}-offline-distro.tar.gz
+        format: gz
+
+    - name: clean
+      shell:  |
+        rm -r /home/{{ansible_user}}/{{apt_package_name}}
+      become: true
+
+    - name: fetch
+      fetch:
+        src:  /home/{{ansible_user}}/{{apt_package_name}}-offline-distro.tar.gz
+        dest: /mnt/distr/
+        flat: yes
+
+
+
