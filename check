@@ -1,0 +1,71 @@
+#!/bin/bash
+if [[ $1 == '' ]]
+then
+	echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo "-----------------------------------------------------------"
+	echo "PLEASE ADD IP TO SCRIPT ARGUMENT 1 - bash check <your_ip>"
+	echo "-----------------------------------------------------------"
+	echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+	exit 1
+fi
+echo "-------------------------------"
+ssh_port="$2"
+#echo $ssh_port
+if [[ "$ssh_port" == "" ]]
+then
+	ssh_port=22
+fi
+echo "SSH PORT: $ssh_port"
+
+echo "-------------------------------"
+
+if $(ping -c 1 $1 &>/dev/null)
+then
+	echo "PING: +"
+else
+	echo "PING: -"
+fi
+
+
+echo "-------------------------------"
+nc -w1 -vz $1 $ssh_port
+
+#check if SSH port is open
+
+if [ $? -ne 0 ]
+then
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "SSH PORT IS UNAVAILABLE!"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    exit 1
+fi
+
+echo "-------------------------------"
+CREDENTIALS=(
+    "svk:1"
+    "detect:detect-pwd"
+    "admin:admin12345"
+    "admin:Admin@12345"
+    "svk:ONqQB6J5DWfVxXu7"
+    "kon:detect-pwd"
+    "admin:videosapiens"
+    "admin:Admin12345"
+    "videosapines:rootroot1!"
+    "admin:rootroot1!"
+)
+
+for cred in "${CREDENTIALS[@]}"; do
+    IFS=':' read -r username password <<< "$cred"
+    ((total_count++))
+    
+    if  sshpass -p "$password" ssh -p $ssh_port -o ConnectTimeout=1 -o StrictHostKeyChecking=no $username@$1 echo "1" 2>/dev/null 1>/dev/null
+    then
+	echo "$username:$password ... +"
+    echo "*******************************************************************************************************************"
+	sshpass -p "$password" ssh -p $ssh_port $username@$1 "lsb_release -r; lspci | grep -E '3D|VGA'; mokutil --sb-state"
+    echo "*******************************************************************************************************************"
+    fi
+
+done
+
+echo "-------------------------------"
