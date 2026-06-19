@@ -1,0 +1,4 @@
+echo "your web is on http://5.252.195.11:9999"
+echo "push the button to connect"
+read button
+ssh -p $1 -L 0.0.0.0:9999:$3:80 $2
