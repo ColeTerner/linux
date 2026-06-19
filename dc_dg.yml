@@ -1,0 +1,864 @@
+---
+###DC status
+  - name: docker ff status(URI)
+    hosts: all
+    gather_facts: false
+    ignore_errors:  true
+    tags: curl
+    tasks:
+      - name: Fetch content from URL
+        raw:  wget -qO - http://127.0.0.1:8888/v2/dbg
+        register: wget
+      - debug:  var=wget.stdout_lines
+
+  - name: setup get ansible data
+    hosts: all
+    gather_facts: false
+    ignore_errors: true
+    tags: setup
+    tasks:
+      - name: extract ansible net data 
+        setup:
+          filter:
+            - ansible_all_ipv4_addresses
+            - ansible_default_ipv4
+        register: net_data
+
+      - name: Display as formatted JSON
+        debug:
+          msg: |
+            {
+              "host": "{{ inventory_hostname }}",
+              "all_ipv4_addresses": {{ net_data.ansible_facts.ansible_all_ipv4_addresses | default([]) | to_nice_json }},
+              "default_ipv4": {{ net_data.ansible_facts.ansible_default_ipv4 | default({}) | to_nice_json }}
+            }
+
+  - name: reboot
+    hosts: all
+    gather_facts: false
+    ignore_errors:  true
+    tags: reboot
+    tasks:
+      - name: reboot
+        raw:  sudo reboot
+        become: true
+
+  - name: journalctl by date
+    hosts: all
+    gather_facts: false
+    ignore_errors:  true
+    tags: journalctl
+    tasks:
+
+      - name: input package name
+        pause:
+          prompt: "Input DATE format - 2026-01-03"
+        register: date_x
+      - debug:  var=date_x.user_input
+
+      - name: bit-radio(errors)
+        raw:  journalctl -u bit-radio.service --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep -E 'Error|ERROR|error'
+        register: bit_radio_errors
+      - debug:  var=bit_radio_errors.stdout_lines
+
+      - name: bit-alert(errors)
+        raw:  journalctl -u bit-alert.service --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep -E 'Error|ERROR|error'
+        register: bit_alert_errors
+      - debug:  var=bit_alert_errors.stdout_lines
+
+      - name: warning_
+        raw:  journalctl --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep -E 'warning_' | grep -v root
+        register: warnings
+      - debug:  var=warnings.stdout_lines
+
+      - name: SOUND
+        raw:  journalctl --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep SOUND | grep -E 'SKIPPED|NOTIFIED|EXECUTED' | grep -v root
+        register: sound
+      - debug:  var=sound.stdout_lines
+
+      - name: ERROR
+        raw:  |
+          journalctl --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep ERROR | head -n 50 | grep -v root
+          journalctl --since {{date_x.user_input}} --until "{{date_x.user_input}} 23:59:59" | grep ERROR | tail -n 50 | grep -v root
+        register: errs
+      - debug:  var=errs.stdout_lines
+
+
+  - name: timedatectl
+    hosts: all
+    gather_facts: false
+    ignore_errors:  true
+    vars:
+      timesrv: "time.windows.com"
+    tags: time
+    tasks:
+
+      - name: set conf and restart
+        raw:  |
+          sed -i 's/#NTP=.*/NTP={{timesrv}}/' /etc/systemd/timesyncd.conf
+          sudo systemctl restart systemd-timesyncd.service
+        become: true
+
+      - name: timedatectl
+        raw:  timedatectl; date
+        register: sync_state
+      - debug:  var=sync_state.stdout_lines
+
+##DC alsa
+  - name: alsa settings
+    hosts:  all
+    gather_facts: False
+    tags: alsa
+    become: yes
+    vars:
+      volume: 100
+    tasks:
+
+      - name: check timezone
+        raw:  |
+          # 6 channels (6ch in alsamixer)
+          sudo amixer set 'Channel Mode' '6ch'
+
+          # Unmute and set volume for all channels
+          for simple_controler in $(sudo amixer scontrols | grep -oE "'.*'" | grep -vE "Auto-Mute" | sed "s/'//g")
+          do
+                  sudo amixer set $simple_controler unmute
+                  sudo amixer set $simple_controler {{ volume }}%
+          done
+
+          # Auto-Mute Mode disabled
+          sudo amixer set 'Auto-Mute Mode' 'Disabled'
+
+          # save sound settings after reboot
+          sudo alsactl store
+          echo "Audio channels unmuted and set to {{ volume }}% volume."
+        register: snd_settings
+      - debug:  var=snd_settings.stdout_lines
+
+  - name: sound test
+    hosts:  all
+    gather_facts: False
+    tags: sound
+    ignore_errors:  true
+    tasks:
+
+      - name: today
+        raw:  grep -a "SOUND PLAYING" /var/log/syslog
+        register: srabotki
+      - debug:  var=srabotki.stdout_lines
+
+      - name: bit-alert status
+        raw:  |
+          echo "-------------------------------------------------------------------------"
+          echo "BIT-ALERT iS ACTIVE: $(systemctl is-active bit-alert)"
+          echo "BIT-ALERT iS ENABLED: $(systemctl is-enabled bit-alert)"
+          echo "BIT-ALERT STATUS: $(systemctl status bit-alert)"
+          echo "-------------------------------------------------------------------------"
+          echo "BIT-ALERT-CLIENT FILES(230): $(ls /opt/bit-alert | wc -l)"
+          echo "BIT-ALERT-CLIENT iS ACTIVE: $(systemctl is-active bit-alert-client)"
+          echo "BIT-ALERT-CLIENT iS ENABLED: $(systemctl is-enabled bit-alert-client)"
+          echo "-------------------------------------------------------------------------"
+        become: true
+        register: bit1_status
+      - debug:  var=bit1_status.stdout_lines
+
+      - name: bit-radio files
+        raw:   ls /opt/bit/bit-radio/radio/alarm/
+        register: bit_files
+      - debug:  var=bit_files.stdout_lines
+
+      - name: bit-radio errors
+        raw:  journalctl -u bit-radio.service --since "7 days ago" | grep -E 'Error|ERROR|error' | grep -v "ClientErrorResultFilter"
+        register: bit_errors
+      - debug:  var=bit_errors.stdout_lines
+
+      - name: bit-radio status
+        raw: systemctl is-active bit-radio
+        register: bit_status
+      - debug:  var=bit_status.stdout_lines
+
+      - name: cron
+        raw: sudo crontab -l
+        become: true
+        register: crn
+      - debug:  var=crn.stdout_lines
+
+      - name: warning_ srabotki
+        raw:  journalctl --since '3 days ago' | grep warning_ | grep -v root
+        register: warnings
+      - debug:  var=warnings.stdout_lines
+
+      - name: all last srabotki
+        raw:  journalctl --since "8 days ago" | grep 'SOUND PLAYING' | grep -E 'SKIPPED|SENT|EXECUTED|RADIO NOTIFIED' | grep -v root | tail -n 100
+        register: srabs
+      - debug:  var=srabs.stdout_lines
+
+
+##DC INFO ABOUT containers
+  - name: docker information
+    hosts:  all
+    gather_facts: false
+    ignore_errors: true
+    tags: info
+    become: true
+    tasks:
+
+      - name: docker containers
+        raw:  docker ps -a
+        register: docker_containers
+      - debug:  var=docker_containers.stdout_lines
+
+      - name: docker inspect
+        raw:  |
+          sudo docker ps -qa | xargs sudo docker inspect | jq -r '.[] | {Id: .Id[0:12], State: .State}' > /tmp/dock.txt
+          sudo cat /tmp/dock.txt
+        register: docker_inspect
+      - debug: var=docker_inspect.stdout_lines
+
+      - name: docker version
+        raw: |
+          echo "--------------------------------SOFTWARE---------------------------------------------"
+          echo "UBUNTU_RELEASE: $(lsb_release -r | grep -oE "[0-9]{2}.[0-9]{2}")"
+          echo "DOCKER version: $(docker --version)"
+          echo "DOCKER-COMPOSE version: $(docker-compose --version)"
+          echo "--------------------------------UNLIFT---------------------------------------------"
+          echo "TOKEN: $(bit status proxy | awk '{print $3}' | awk -F '(' '{print $1}')"
+          echo "BIT_STATUS_PROXY: $(bit status proxy)"
+          echo "--------------------------------DATE/TIME---------------------------------------------"
+          echo "CURRENT_TIME: $(date)"
+          echo "CURRENT_TZ: $(timedatectl | grep -E "Europe|Asia" | awk -F ":" '{print $2}')"
+          echo "TIME_IS_SYNCHRONIZED: $(timedatectl | grep 'synchronize')"
+          echo "NTP_SERVER(/etc/systemd/timesyncd.conf): $(grep -A 10 "\[Time\]" /etc/systemd/timesyncd.conf | grep -E "^NTP=|^#NTP=" | awk -F "=" '{print $NF}')"
+          echo "--------------------------------HARDWARE---------------------------------------------"
+          echo "MOTHERBOARD: $(sudo dmidecode -s baseboard-product-name)"
+          echo "CPU: $(sudo dmidecode -t processor | grep Version:)"
+          echo "DISK: $(sudo lshw -class disk | grep -E 'product:|size:')"
+          echo "RAM: $(sudo dmidecode -t memory | grep -oE 'Part Number:.*' | head -n1)"
+          echo "GPU: $(lspci | grep -E '3d|VGA')"
+          echo "CONTAINERS_DATE_WHEN_0: $(journalctl -u bit.service | grep 'Running containers: 0' | head -n1)"
+        ignore_errors:  true
+        register: docker_version
+      - debug:  var=docker_version.stdout_lines
+
+  - name: tz_msk
+    hosts:  all
+    gather_facts: False
+    become: yes
+    tags: tz_msk
+    tasks:
+
+      - name: check timezone
+        raw:  timedatectl set-timezone Europe/Moscow
+        
+      - name: check timezone
+        raw:  |
+          echo "DATE: $(date)"
+          echo "TIMEZONE: $(timedatectl | grep -oE '.*/.*' | tr -d ' ' | sed 's/Timezone://g')"
+        register: tz2
+      - debug:  var=tz2.stdout_lines
+
+###DC balancer
+  - name: docker access ports
+    hosts: all
+    gather_facts: false
+    tags: balancer
+    tasks:
+      - name: Fetch content from URL
+        raw:  |
+          nc -w1 -vz 176.114.69.107 8101-8108
+          nc -w1 -vz 176.114.69.107 3144
+          nc -w1 -vz 176.114.69.107 443
+        register: access
+      - debug:  var=access.stdout_lines
+
+      - name: curl check
+        raw:  |
+          curl -s -o /dev/null -w "%{http_code}" http://shard:8105
+          curl -s -o /dev/null -w "%{http_code}" http://shard:8106
+          curl -s -o /dev/null -w "%{http_code}" http://shard:8107
+          curl -s -o /dev/null -w "%{http_code}" http://shard:8108
+        register: check
+      - debug:  var=check.stdout_lines
+
+
+###DC ERRORS
+  - name: docker errors
+    hosts: all
+    gather_facts: false
+    tags: errors
+    tasks:
+      - name: errors
+        raw: journalctl -a --since "60min ago"| grep ERROR | tail -n 100
+        register: last_100_errors
+      - debug:  var=last_100_errors.stdout_lines
+
+      - name: err stat
+        raw: |
+          echo "1.NETWORK"
+          echo "ERROR_COMMUNICATION: $(zgrep 'ERROR_COMMUNICATION' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "Link is down(net_interface): $(zgrep -a "Link is Down" /var/log/kern.log*|grep -c .)"
+          echo ""
+          echo "2.NTLS"
+          echo "FAILED_TO_CONNECT_TO_NTLS: $(zgrep 'Failed to connect to NTLS' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "HTTP 599(unlift): $(journalctl -u unlift.service | grep 'HTTP 599' | wc -l)"
+          echo ""
+          echo "3.CAMERA"
+          echo "No_route_to_host: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'No route to host' | wc -l)"
+          echo "401 Unauthorized: $(zgrep '401 Unauthorized' /var/log/syslog.* /var/log/syslog | wc -l)"
+          echo "DECODE_ERRORS: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'decoder_soft_errors' | wc -l)"
+          echo ""
+          echo "4.GPU"
+          echo "GPU_ERRORS: $(journalctl -u findface-video-worker-gpu.service | grep 'ERROR' | wc -l) "
+          echo ""
+          echo "5.Hardware timeout"
+          echo "TIMEOUT_WAS_REACHED: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | grep 'Timeout was reached' | wc -l)"
+          echo "----------------------------"
+          echo "ITOGO_OSHIBOK_ZA_NEDELU: $(zgrep 'ERROR' /var/log/syslog.* /var/log/syslog | wc -l)"
+        register: err_stat
+        ignore_errors:  true
+      - debug:  var=err_stat.stdout_lines
+
+#DC RESTART
+  - name: docker-compose restart
+    hosts:  all
+    gather_facts: false
+    tags: restart
+    become: true
+    tasks:
+
+      - name: docker-compose down
+        raw: |
+          docker-compose down
+          docker ps -a
+        register: containers_1
+      - debug:  var=containers_1.stdout_lines
+
+      - name: docker version
+        raw: |
+          docker-compose up -d
+          docker ps
+        register: containers_2
+      - debug:  var=containers_2.stdout_lines
+
+  - name: log_statistic
+    hosts: all
+    vars:
+      ansible_shell_executable: /bin/bash
+    gather_facts: false
+    tags: stat
+    become: yes
+    tasks:
+
+      - name: stat
+        raw:  |
+          LOGS=('/var/log/syslog' '/var/log/syslog.1' '/var/log/syslog.2.gz' '/var/log/syslog.3.gz' '/var/log/syslog.4.gz' '/var/log/syslog.5.gz' '/var/log/syslog.6.gz' '/var/log/syslog.7.gz')
+          for item in "${LOGS[@]}"
+          do
+            echo "$item: $(zgrep -c '^' $item), visits: $(zgrep 'confidence is' $item | grep -v 'now threshold' | wc -l)"
+          done
+        register: lg_count
+      - debug:  var=lg_count.stdout_lines
+
+  - name: overheat
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: throttle
+    tasks:
+
+#Core temperature above threshold
+      - name: count throttle ERROR for today
+        raw:  zgrep 'throttled|Throttled|error|failed|Failed|Core temperature above threshold' /var/log/kern.log.* /var/log/kern.log | tail -n 50
+        register: throttle
+      - debug:  var=throttle.stdout
+
+      - name: count throttle ERROR
+        raw:  grep -E 'throttled|Throttled|error|failed|Failed' /var/log/kern.log.* | wc -l
+        register: throttle_counter
+      - debug:  var=throttle_counter.stdout
+
+#DC kern logs
+  - name: Observe logs
+    hosts:  all
+    gather_facts: false
+    ignore_errors:  true
+    tags: logs
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+    tasks:
+
+    - name: kern logs count
+      raw:  journalctl -p 0..3 | grep kernel 
+      register: kern_logs
+      become: yes
+    - debug:  var=kern_logs.stdout_lines
+
+    - name: dmesg
+      raw: dmesg --level=alert,err,crit,emerg | tail -n 100
+      register: dmesg
+      become: yes
+    - debug: var=dmesg.stdout
+
+    - name: dmesg errors
+      raw: dmesg --level=alert,err,crit,emerg | wc -l
+      register: dmesg
+      become: yes
+    - debug: var=dmesg.stdout
+
+    - name: kern logs count
+      raw:  journalctl -p 0..3 | grep kernel | wc -l
+      register: kern_logs_count
+      become: yes
+    - debug:  var=kern_logs_count.stdout
+
+#DC confidence
+  - name: Check confidence
+    hosts: all
+    gather_facts: false
+    become: yes
+    tags: confidence
+    tasks:
+
+      - name: number of visits for today
+        raw: zgrep 'confidence is' /var/log/syslog | grep -v "None" | awk '{print $1,$2,$3,$NF}' | wc -l
+        register: today_visits
+      - debug:  var=today_visits.stdout
+
+      - name: today
+        raw: zgrep 'confidence is' /var/log/syslog | tail -n 25
+        register: today_confidence
+      - debug:  var=today_confidence.stdout_lines
+
+      - name: date
+        raw: date
+        register: date
+      - debug:  var=date.stdout
+
+      - name: visits per whole week (except today)
+        raw:  zgrep 'confidence is' /var/log/syslog.* | wc -l
+        register: visits
+      - debug:  var=visits.stdout
+
+      - name: threshold
+        raw: zgrep 'confidence is' /var/log/syslog.* /var/log/syslog | grep -m 1 -oE "threshold is 0\.[0-9]{2}" | awk '{print $NF}'
+        register: threshold
+      - debug:  var=threshold.stdout
+
+      - name: everything
+        raw:  zgrep 'now threshold is {{threshold.stdout}} and confidence is' /var/log/syslog.* /var/log/syslog | grep -v 'None'
+        register: all_confidence
+      - debug:  var=all_confidence.stdout_lines
+
+      - name: number of srabotok per week
+        raw:  zgrep 'now threshold is {{threshold.stdout}} and confidence is' /var/log/syslog.* /var/log/syslog | grep -v 'None' | wc -l
+        register: srabotki
+      - debug:  var=srabotki.stdout_lines
+
+#hardware sum
+
+  - name: harware information
+    hosts:  all
+    gather_facts: false
+    tags: hw_sum
+    become: true
+    tasks:
+
+      - name: monitor script
+        raw: |
+          echo "RAM: $(sudo lshw -c memory | grep "serial: *" | awk -F ":" '{print $2}')"
+          echo "DISK: $(udisksctl  status|grep -v MODEL|grep -v "\-\-"|column -t|awk '{print $1,$2}'|head -n1)"
+          echo "MOTHERBOARD: $(sudo dmidecode -t baseboard | grep "Product Name:" | awk -F ":" '{print $2}')"
+        register: summary
+      - debug:  var=summary.stdout_lines
+
+#facelog
+
+  - name: facelog bitrun
+    hosts:  all
+    gather_facts: false
+    tags: facelog
+    become: true
+    tasks:
+      
+      - name: get date
+        pause:
+          prompt: "INTPUD DATE(FORMAT - 2026-04-08 , YEAR-MONTH-DAY)"
+        register: dateface
+      - debug:  var=dateface.user_input
+
+      - name: clear date
+        raw:  echo "{{dateface.user_input}}" | tr -d '-'
+        register: clear_date
+      - debug:  var=clear_date.stdout
+
+      - name: clean the output
+        set_fact:
+          clean_date: "{{ clear_date.stdout | trim }}"
+      - debug:  var=clean_date
+
+      - name: shell
+        raw:  |
+          journalctl --since "{{dateface.user_input}} 00:00" --until "{{dateface.user_input}} 23:59" > /tmp/syslog.txt
+          tar -czvf /tmp/facelog_{{clean_date}}.tar.gz /opt/unlift/unlift_proxy/{{clean_date}} /tmp/syslog.txt
+          chown {{ansible_user}}:{{ansible_user}} /tmp/facelog_{{clean_date}}.tar.gz
+        become: true
+
+      - name: echo
+        raw:  |
+          echo "scp {{ansible_user}}@{{ansible_host}}:/tmp/facelog_{{clean_date}}.tar.gz ."
+          du -sh /tmp/facelog_{{clean_date}}.tar.gz
+        register: path
+      - debug:  var=path.stdout_lines
+
+#DC rtsp
+  - name: docker compute rtsp
+    hosts:  all
+    tags: rtsp
+    gather_facts: False
+    ignore_errors:  true
+    become: yes
+    vars:
+      rtsp_list:
+        - "/live/main"
+        - "/h264"
+        - "/H264?ch=1&subtype=0"
+        - "/ISAPI/Streaming/Channels/101"
+        - "/cam/realmonitor?channel=1&subtype=0"
+        - "/ch01/0"
+        - "/stream1"
+        - "/Streaming/Channels/1"
+        - "/h264Preview_01_main"
+        - "/av0_0"
+        - ":554/Streaming/Channels/101"
+        - "/onvif1"
+        - ""
+    tasks:
+
+      #ping cams
+      - name: get ip cams
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | grep -v "127.0.0.1"
+        register: ip_cams
+      - debug:  var=ip_cams.stdout_lines
+
+
+      - name: ping
+        raw:  ping -c 4 '{{item}}'
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #netcat
+      - name: netcat 554
+        raw:  nc -w1 -vz {{item}} 554
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #rtsp
+#wget -qO - http://127.0.0.1:18810/jobs | jq -r '.[].stream_url' - get RTSP if JQ is present
+
+      - name: get clean rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "rtsp://.*:.*@\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: rtsp_clean
+      - debug:  var=rtsp_clean.stdout_lines
+
+      - name: current rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "rtsp://.*:.*@\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: current_rtsp
+      - debug:  var=current_rtsp.stdout_lines
+
+      - name: check
+        #raw:  sudo docker run --rm --network=host -v /tmp:/output jrottenberg/ffmpeg:7.0.2-ubuntu2204 -rtsp_transport tcp -timeout 5000000 -i "{{item.0}}{{item.1}}" -t 5 -c copy -y /output/video_$i.mkv
+        raw:  docker run --pull=never --network=host -it jrottenberg/ffmpeg:7.0.2-ubuntu2204 -rtsp_transport tcp -t 10 -i "{{item.0}}{{item.1}}" -vcodec copy -an test.mp4 -y
+        #shell: echo "{{item.0}}{{item.1}}"
+        with_nested:
+          - "{{rtsp_clean.stdout_lines}}"
+          - "{{rtsp_list}}"
+        ignore_errors:  true
+
+  - name: jq docker compute rtsp
+    hosts:  all
+    tags: jq_rtsp
+    gather_facts: False
+    ignore_errors:  true
+    become: yes
+    vars:
+      rtsp_list:
+        - "/live/main"
+        - "/h264"
+        - "/H264?ch=1&subtype=0"
+        - "/ISAPI/Streaming/Channels/101"
+        - "/cam/realmonitor?channel=1&subtype=0"
+        - "/ch01/0"
+        - "/stream1"
+        - "/Streaming/Channels/1"
+        - "/h264Preview_01_main"
+        - "/av0_0"
+        - ":554/Streaming/Channels/101"
+        - "/onvif1"
+        - ""
+    tasks:
+
+      #ping cams
+      - name: get ip cams
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | grep -v "127.0.0.1"
+        register: ip_cams
+      - debug:  var=ip_cams.stdout_lines
+
+
+      - name: ping
+        raw:  ping -c 4 '{{item}}'
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      #netcat
+      - name: netcat 554
+        raw:  nc -w1 -vz {{item}} 554
+        with_items:
+          - '{{ip_cams.stdout_lines}}'
+
+      - name: jq is present
+        raw:  dpkg -l | grep jq
+        register: jq_check
+      - debug:  var=jq_check.stdout_lines
+
+      #rtsp
+#wget -qO - http://127.0.0.1:18810/jobs | jq -r '.[].stream_url' - get RTSP if JQ is present
+
+      - name: current rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | jq -r '.[].stream_url'
+        register: current_rtsp
+      - debug:  var=current_rtsp.stdout_lines
+
+      - name: get clean rtsp
+        raw:  wget -qO - http://127.0.0.1:18810/jobs | jq -r '.[].stream_url' | grep -oE "rtsp://.*:.*@\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
+        register: rtsp_clean
+      - debug:  var=rtsp_clean.stdout_lines
+
+      - name: check
+        raw:  docker run --pull=never --network=host -it jrottenberg/ffmpeg -rtsp_transport tcp -t 10 -i "{{item.0}}{{item.1}}" -vcodec copy -an test.mp4 -y
+        #shell: echo "{{item.0}}{{item.1}}"
+        with_nested:
+          - "{{rtsp_clean.stdout_lines}}"
+          - "{{rtsp_list}}"
+        ignore_errors:  true
+
+  - name: speedtest
+    hosts:  all
+    gather_facts: false
+    tags: speedtest    
+    become: true
+    tasks:
+
+      - name: input balancer
+        pause:
+          prompt: "INPUT BALANCER(ITSM connections):"
+        register: inp_balancer
+      - debug:  var=inp_balancer.user_input
+
+      - name: curl
+        raw:  curl -v http://{{inp_balancer.user_input}}:8101
+        register: crl
+      - debug:  var=crl.stdout_lines
+
+      - name: speed_download
+        raw:  curl -O http://{{inp_balancer.user_input}}:8101/speedtest/download/10m
+        register: dwld
+      - debug:  var=dwld.stdout_lines
+
+      - name: speed_upload
+        raw:  curl -O http://{{inp_balancer.user_input}}:8101/speedtest/upload/10m
+        register: upld
+      - debug:  var=upld.stdout_lines
+  
+  - name: apt check software of user and build-in
+    hosts: all
+    gather_facts: false
+    become: true
+    vars:
+      apt_packages_x: "curl wget openvpn"
+    tags: distr
+    tasks:
+
+      - name: release
+        raw: lsb_release -r | awk '{print $NF}'
+        register: relese
+      - debug: var=release.stdout_lines
+
+      - name: create sources
+        raw:  |
+          sudo rm -rf /etc/apt/sources.list.d/ubuntu.sources
+          sudo touch /etc/apt/sources.list.d/ubuntu.sources
+          cat > /etc/apt/sources.list.d/ubuntu.sources << 'EOF'
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu/
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main restricted universe multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+        ignore_errors:  true
+
+      - name: apt update and apt install software-properties-common dpkg-dev apt-rdepends
+        raw:  sudo apt update && sudo apt install software-properties-common dpkg-dev apt-rdepends -y
+
+      - name: rm and create new dir - ~/deb_packages
+        raw:  |
+          rm -rf /home/{{ansible_user}}/deb_packages
+          mkdir -p /home/{{ansible_user}}/deb_packages
+          chown -R {{ansible_user}}:{{ansible_user}} /home/{{ansible_user}}/deb_packages && chmod -R 755 /home/{{ansible_user}}/deb_packages
+
+      - name: brew distr
+        raw:  |
+          cd /home/{{ansible_user}}/deb_packages
+          for package in {{apt_packages_x}}; do
+            apt-rdepends $package | grep -v "^ " | xargs -n1 apt download
+          done
+          dpkg-scanpackages -m . | gzip -c > Packages.gz
+          echo "deb [trusted=yes] file:///var/lib/offline ./" > offline_distr.list
+          cd ~{{ansible_user}}
+          tar -czvf offline_distro_{{apt_packages_x | replace(' ', '_')}}.tar.gz deb_packages
+          chown {{ansible_user}}:{{ansible_user}} offline_distro_{{apt_packages_x | replace(' ', '_')}}.tar.gz
+      
+      - name: check
+        raw:  |
+          ls -lah /home/{{ansible_user}}/deb_packages
+          echo "-------------------------------------"
+          echo "/home/{{ansible_user}}/"
+          ls -lah /home/{{ansible_user}} | grep ".tar.gz"
+        register: files
+      - debug:  var=files.stdout_lines
+
+      - name: cat /home/user/deb_packages/offline_distr.list
+        raw:  cat /home/{{ansible_user}}/deb_packages/offline_distr.list
+        register: listx
+      - debug:  var=listx.stdout
+
+      - name: fetch to /mnt/sdb/grigorev for sup2
+        raw: echo "scp {{ansible_user}}@{{ansible_host}}:/home/{{ansible_user}}/offline_distro_{{apt_packages_x | replace(' ', '_')}}.tar.gz ."
+        register: location
+      - debug:  var=location.stdout
+
+  - name: install nvidia-driver
+    hosts:  all
+    gather_facts: false
+    tags: nvidia
+    tasks:
+
+      - name: nvidia-smi
+        raw:  nvidia-smi
+        register: driver
+        ignore_errors:  true
+      - debug:  var=driver.stdout_lines
+
+      - name: input balancer
+        raw:  |
+          sudo add-apt-repository -y ppa:graphics-drivers/ppa
+          sudo apt update && sudo apt install nvidia-driver-580 -y
+          sudo nvidia-xconfig
+        become: true
+
+      - name: reboot
+        raw:  sudo reboot
+        become: true
+  
+  - name: restart compose
+    hosts:  all
+    gather_facts: false
+    become: true
+    tags: compose
+    tasks:
+
+      - name: docker compose restart 
+        raw:  |
+          sudo cat /etc/docker/daemon.json
+          sudo cp /etc/docker/daemon.json /tmp/
+          sudo docker-compose -f /var/tmp/docker-compose.yaml down -v --remove-orphans
+          sed -i 's/nvidia/runc/' /etc/docker/daemon.json
+
+          sudo systemctl daemon-reload
+          sudo systemctl restart docker
+          sudo docker-compose -f /var/tmp/docker-compose.yaml up -d --remove-orphans
+        ignore_errors:  true
+
+      - name: test
+        raw:  sudo docker ps -a
+        register: testik
+      - debug:  var=testik.stdout_lines
+      
+  - name: guess rtsp
+    hosts:  all
+    gather_facts: false
+    tags: rtsp2
+    tasks:
+
+      - name: rtsp guess
+        raw: |
+          rm /tmp/rtsp.sh && touch /tmp/rtsp.sh
+          chmod +x /tmp/rtsp.sh
+
+          cat > /tmp/rtsp.sh << 'EOF'
+          #!/bin/bash
+
+          bases=$(curl -s http://127.0.0.1:18810/jobs | jq -r ".[]|.stream_url" | sed "s%rtsp://%%" | cut -d ":" -f1,2 | cut -d "." -f1,2,3,4 | cut -d "/" -f1 | sort -u)
+
+          if [ -z "$bases" ]; then
+              echo "No bases found!"
+              exit 1
+          fi
+
+          url_paths=(
+              ""
+              "live/main"
+              "h264"
+              "H264?ch=1&subtype=0"
+              "ISAPI/Streaming/Channels/101"
+              "cam/realmonitor?channel=1&subtype=0"
+              "ch01/0"
+              "stream1"
+              "Streaming/Channels/1"
+              "h264Preview_01_main"
+              "av0_0"
+          )
+
+          results=()
+
+          while IFS= read -r base; do
+              echo "Testing camera: $base"
+              
+              for path in "${url_paths[@]}"; do
+                  if [ -n "$path" ]; then
+                      url="rtsp://$base/$path"
+                  else
+                      url="rtsp://$base"
+                  fi
+                  
+                  echo -n "  Testing $url... "
+                  
+                  if sudo docker run --rm -v "$(pwd)":"$(pwd)" -w "$(pwd)" jrottenberg/ffmpeg:7.0.2-ubuntu2204 \
+                      -i "$url" \
+                      -vframes 1 \
+                      -f null \
+                      - 2>&1 | grep -q "video:"; then
+                      echo "OK"
+                      results+=("$base|$url")
+                      break
+                  else
+                      echo "FAIL"
+                  fi
+              done
+          done <<< "$bases"
+
+          echo "================================"
+          echo "Summary of working RTSP URLs:"
+          for result in "${results[@]}"; do
+              camera=$(echo "$result" | cut -d'|' -f1)
+              url=$(echo "$result" | cut -d'|' -f2)
+              echo "Camera: $camera -> $url"
+          done
+
+          exit 0
+          EOF
+
+          bash /tmp/rtsp.sh
+        register: guess
+        become: true
+        ignore_errors: true
+      - debug: var=guess.stdout_lines
